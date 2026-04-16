@@ -701,3 +701,9 @@ uncitral-isds-llm-research-design/
 > 你不是用 LLM 直接写出答案，而是用 LLM 帮你把大量谈判文本变成可以做实证研究的数据。
 
 这才是把 LLM 用到“最大程度且足够科学”的方式。
+
+---
+
+## 补充说明
+
+- 无标签、无监督主题发现操作手册：`/Users/gaochenjun/Documents/New project/uncitral-isds-llm-research-design/unsupervised-topic-discovery-guide.md`
