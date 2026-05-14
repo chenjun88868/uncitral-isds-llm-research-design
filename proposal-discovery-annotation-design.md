@@ -1,6 +1,6 @@
 # Proposal Discovery Annotation Design
 
-这份说明记录我如何设计 UNCITRAL ISDS 改革逐字稿中的 proposal discovery 人工标注任务。我的目标不是让模型直接替我发现所有 proposal，而是先做一批质量可控的人工标注数据，再用它训练和评估后续的 supervised machine learning / open-source LLM 方法。
+这份说明记录如何设计 proposal discovery 人工标注任务。我的目标不是让模型直接替我发现所有 proposal，而是先做一批质量可控的人工标注数据，再用 supervised machine learning。
 
 ## 1. 分析单位
 
