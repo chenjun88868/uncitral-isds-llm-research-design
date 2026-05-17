@@ -4,6 +4,14 @@
 
 网页入口：<https://chenjun88868.github.io/UNCITRAL-ISDS/>
 
+跨设备同步需要在 Supabase SQL Editor 中执行一次：
+
+```text
+supabase/research_journal_schema.sql
+```
+
+该网页使用公开 publishable key，不设置登录；任何打开网页的人都可以查看和修改 journal。
+
 ## 一、研究目标
 
 ### 1.1 核心研究问题

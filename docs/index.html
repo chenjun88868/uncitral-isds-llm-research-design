@@ -557,8 +557,15 @@
     </section>
   </main>
 
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script>
     const storageKey = "researchJournal.v1";
+    const clientIdKey = "researchJournal.clientId";
+    const journalTable = "research_journal_entries";
+    const supabaseUrl = "https://uohkqeplykcnvmwvqbvv.supabase.co";
+    const supabaseKey = "sb_publishable_FfF_fDeye4MUCsHBlrdcyA_DZ5bJpI4";
+    const supabaseClient = window.supabase?.createClient(supabaseUrl, supabaseKey);
+    const clientId = getClientId();
     const monthsEl = document.querySelector("#months");
     const datePicker = document.querySelector("#datePicker");
     const todayLabel = document.querySelector("#todayLabel");
@@ -576,7 +583,9 @@
     let selectedDate = clampDateKey(toDateKey(today));
     let journal = loadJournal();
     let saveTimer = null;
+    let syncPollTimer = null;
     let pendingScrollToSelected = true;
+    let lastRemoteSyncAt = null;
 
     todayLabel.textContent = `今天：${formatChineseDate(toDateKey(today))}`;
 
@@ -588,13 +597,26 @@
       }
     }
 
-    function persistJournal() {
+    function persistLocalJournal(message) {
       localStorage.setItem(storageKey, JSON.stringify(journal));
-      savedState.textContent = `已保存：${new Date().toLocaleTimeString("zh-CN", {
+      if (message) {
+        savedState.textContent = message;
+        return;
+      }
+      savedState.textContent = `本地已保存，正在同步：${new Date().toLocaleTimeString("zh-CN", {
         hour: "2-digit",
         minute: "2-digit",
         second: "2-digit"
       })}`;
+    }
+
+    function getClientId() {
+      let id = localStorage.getItem(clientIdKey);
+      if (!id) {
+        id = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+        localStorage.setItem(clientIdKey, id);
+      }
+      return id;
     }
 
     function addMonths(date, count) {
@@ -707,7 +729,7 @@
       meetingToggle.checked = item.meeting;
       setEditorContent(gaoNote, item.gao || "");
       setEditorContent(wangNote, item.wang || "");
-      savedState.textContent = "记录会自动保存在此浏览器中";
+      savedState.textContent = supabaseClient ? "记录会自动保存并同步到所有设备" : "云端同步未加载，当前仅本地保存";
     }
 
     function saveSelectedDay() {
@@ -720,14 +742,15 @@
         delete journal[selectedDate];
       }
 
-      persistJournal();
+      persistLocalJournal();
+      syncDayToCloud(selectedDate);
       updateSelectedDayButton();
     }
 
     function scheduleSave() {
-      savedState.textContent = "正在保存...";
+      savedState.textContent = "正在保存并同步...";
       clearTimeout(saveTimer);
-      saveTimer = setTimeout(saveSelectedDay, 180);
+      saveTimer = setTimeout(saveSelectedDay, 450);
     }
 
     function updateSelectedDayButton() {
@@ -803,6 +826,138 @@
       }
     }
 
+    function rowToEntry(row) {
+      return {
+        meeting: Boolean(row.meeting),
+        gao: row.gao || "",
+        wang: row.wang || "",
+        updatedAt: row.updated_at || null,
+        updatedBy: row.updated_by || null
+      };
+    }
+
+    function entryToRow(dateKey, entry) {
+      return {
+        entry_date: dateKey,
+        meeting: Boolean(entry?.meeting),
+        gao: entry?.gao || "",
+        wang: entry?.wang || "",
+        updated_at: new Date().toISOString(),
+        updated_by: clientId
+      };
+    }
+
+    async function loadCloudJournal({ silent = false } = {}) {
+      if (!supabaseClient) return;
+      if (!silent) savedState.textContent = "正在从云端加载记录...";
+
+      const { data, error } = await supabaseClient
+        .from(journalTable)
+        .select("entry_date, meeting, gao, wang, updated_at, updated_by")
+        .gte("entry_date", calendarMinDate)
+        .lte("entry_date", calendarMaxDate);
+
+      if (error) {
+        savedState.textContent = "云端同步未启用：请先在 Supabase 中创建数据表和权限";
+        console.error("Supabase load failed:", error);
+        return;
+      }
+
+      const cloudJournal = {};
+      data.forEach((row) => {
+        const entry = rowToEntry(row);
+        if (entry.meeting || noteHasContent(entry.gao) || noteHasContent(entry.wang)) {
+          cloudJournal[row.entry_date] = entry;
+        }
+      });
+
+      journal = cloudJournal;
+      lastRemoteSyncAt = new Date();
+      persistLocalJournal(`云端已同步：${lastRemoteSyncAt.toLocaleTimeString("zh-CN", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit"
+      })}`);
+      renderCalendar();
+      if (!isEditingSelectedDay()) loadSelectedDay();
+    }
+
+    async function syncDayToCloud(dateKey) {
+      if (!supabaseClient) {
+        persistLocalJournal("本地已保存；云端同步脚本未加载");
+        return;
+      }
+
+      const entry = journal[dateKey];
+      const hasCloudRow = Boolean(entry && (entry.meeting || noteHasContent(entry.gao) || noteHasContent(entry.wang)));
+
+      try {
+        if (!hasCloudRow) {
+          const { error } = await supabaseClient
+            .from(journalTable)
+            .delete()
+            .eq("entry_date", dateKey);
+          if (error) throw error;
+        } else {
+          const { error } = await supabaseClient
+            .from(journalTable)
+            .upsert(entryToRow(dateKey, entry), { onConflict: "entry_date" });
+          if (error) throw error;
+        }
+
+        const syncedAt = new Date();
+        savedState.textContent = `云端已保存：${syncedAt.toLocaleTimeString("zh-CN", {
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit"
+        })}`;
+      } catch (error) {
+        savedState.textContent = "云端保存失败：请检查 Supabase 数据表和权限";
+        console.error("Supabase save failed:", error);
+      }
+    }
+
+    function applyRemoteChange(payload) {
+      const row = payload.new || payload.old;
+      const dateKey = row?.entry_date;
+      if (!dateKey || dateKey < calendarMinDate || dateKey > calendarMaxDate) return;
+      if (payload.new?.updated_by === clientId) return;
+
+      if (payload.eventType === "DELETE") {
+        delete journal[dateKey];
+      } else {
+        journal[dateKey] = rowToEntry(payload.new);
+      }
+
+      persistLocalJournal("已收到其他设备的更新");
+      renderCalendar();
+      if (dateKey === selectedDate && !isEditingSelectedDay()) loadSelectedDay();
+    }
+
+    function subscribeToCloudChanges() {
+      if (!supabaseClient) return;
+
+      supabaseClient
+        .channel("research-journal-sync")
+        .on(
+          "postgres_changes",
+          { event: "*", schema: "public", table: journalTable },
+          applyRemoteChange
+        )
+        .subscribe((status) => {
+          if (status === "SUBSCRIBED") {
+            savedState.textContent = "云端实时同步已连接";
+          }
+        });
+
+      clearInterval(syncPollTimer);
+      syncPollTimer = setInterval(() => loadCloudJournal({ silent: true }), 8000);
+    }
+
+    function isEditingSelectedDay() {
+      return document.activeElement === gaoNote || document.activeElement === wangNote;
+    }
+
     document.querySelector("#prevMonth").addEventListener("click", () => {
       selectDate(toDateKey(addMonths(parseDateKey(selectedDate), -1)));
     });
@@ -835,6 +990,8 @@
 
     loadSelectedDay();
     renderCalendar();
+    loadCloudJournal();
+    subscribeToCloudChanges();
 
     function clampDateKey(key) {
       if (key < calendarMinDate) return calendarMinDate;
